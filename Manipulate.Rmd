@@ -1,0 +1,135 @@
+---
+title: "Manipulate"
+author: "Vahab"
+date: '2022-03-09'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Read online table
+
+### Download table (`*.csv`)
+```{r}
+# set variables
+csv_url  <- "https://oceanview.pfeg.noaa.gov/erddap/tabledap/cciea_AC.csv"
+# if ERDDAP server down (Error in download.file) with URL above, use this:
+#    csv_url <- "https://raw.githubusercontent.com/noaa-iea/r3-train/master/data/cciea_AC.csv"
+dir_data <- "data"
+
+# derived variables
+csv <- file.path(dir_data, basename(csv_url))
+
+# create directory
+dir.create(dir_data, showWarnings = F)
+
+# download file
+if (!file.exists(csv))
+  download.file(csv_url, csv)
+```
+
+### Read table `read.csv()`
+```{r}
+# attempt to read csv
+d <- read.csv(csv)
+
+# show the data frame
+#d
+```
+
+```{r}
+# read csv by skipping first two lines, so no header
+d <- read.csv(csv, skip = 2, header = FALSE)
+#d
+
+# update data frame to original column names
+names(d) <- names(read.csv(csv))
+#d
+
+# update for future reuse (NEW!)
+write.csv(d, csv, row.names = F)
+```
+### Show table `DT::datatable()`
+```{r}
+DT::datatable(d)
+
+```
+## Wrangle data
+
+### Manipulate with `dplyr`
+```{r}
+library(DT)
+library(dplyr)
+
+d <- d %>% 
+  # tibble
+  tibble() %>% 
+  # mutate time
+  mutate(
+    time = as.Date(substr(time, 1, 10))) %>% 
+  # select columns
+  select(
+    time, 
+    starts_with("total_fisheries_revenue")) %>% 
+  # filter rows
+  filter(
+    time >= as.Date("1981-01-01"))
+datatable(d)
+```
+### Tidy with `tidyr`
+```{r}
+library(tidyr)
+
+d <- d %>% 
+  pivot_longer(-time)
+
+datatable(d)
+```
+### Summarize with `dplyr`
+```{r}
+library(stringr)
+
+d <- d %>% 
+  mutate(region = str_replace(name, "total_fisheries_revenue_", "")) %>%
+  select(time, region, value)
+datatable(d)
+```
+#summary data
+```{r}
+d_sum <- d %>% 
+  group_by(region) %>% 
+  summarize(
+    avg_revenue = mean(value))
+datatable(d_sum) %>% 
+  formatCurrency("avg_revenue")
+```
+### Apply functions with `purrr` on a `nest`'ed `tibble`
+#### One of the major innovations of a tibble is the ability to store nearly any object in the cell of a table as a list column. This could be an entire table, a fitted model, plot, etc. Let’s try out these features driven by the question: What’s the trend over time for fishing revenue by region?
+```{r}
+library(purrr)
+
+n <- d %>% 
+  group_by(region) %>% 
+  nest(
+    data = c(time, value))
+n
+ 
+```
+##### The purrr R package provides functions to operate on list objects, in this case the nested data. and application of functions on these data with purrr’s map function. We can feed the data object into an anonymous function where we fit the linear model lm() and return a list object. To then extract the coefficient from the model coef(summary()), we want to return a type of double (not another list object), so we use the map_dbl() function.
+```{r}
+n <- n %>% 
+  mutate(
+    lm    = map(data, function(d){
+      lm(value ~ time, d) } ),
+    trend = map_dbl(lm, function(m){
+      coef(summary(m))["time","Estimate"] }))
+n
+```
+```{r}
+n %>% 
+  select(region, trend) %>% 
+  datatable()
+```
+
